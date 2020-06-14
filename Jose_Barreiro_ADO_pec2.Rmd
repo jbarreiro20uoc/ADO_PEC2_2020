@@ -1,0 +1,634 @@
+---
+title: "ADO_PEC2"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Cargamos las librerías necesarias
+```{r echo=FALSE, message=FALSE}
+if(!require(BiocManager)) install.packages("BiocManager")
+if(!require(airway)) BiocManager::install("airway")
+if(!require(Rsamtools)) BiocManager::install("Rsamtools")
+if(!require(GenomicFeatures)) BiocManager::install("GenomicFeatures")
+if(!require(DESeq2)) BiocManager::install("DESeq2")
+if(!require(apeglm)) BiocManager::install("apeglm")
+if(!require(BiocParallel)) BiocManager::install("BiocParallel")
+if(!require(genefilter)) BiocManager::install("genefilter")
+if(!require(org.Hs.eg.db)) BiocManager::install("org.Hs.eg.db")
+if(!require(AnnotationDbi)) BiocManager::install("AnnotationDbi")
+if(!require(ReportingTools)) BiocManager::install("ReportingTools")
+if(!require(RUVSeq)) BiocManager::install("RUVSeq")
+if(!require(sva)) BiocManager::install("sva")
+if(!require(Gviz)) BiocManager::install("Gviz")
+
+if(!require(magrittr)) install.packages("magrittr", dep=TRUE)
+if(!require(dplyr)) install.packages("dplyr", dep=TRUE)
+if(!require(ggplot2)) install.packages("ggplot2", dep=TRUE)
+if(!require(pheatmap)) install.packages("pheatmap", dep=TRUE)
+if(!require(RColorBrewer)) install.packages("RColorBrewer", dep=TRUE)
+if(!require(RColorBrewer)) install.packages("RColorBrewer", dep=TRUE)
+if(!require(ggbeeswarm)) install.packages("ggbeeswarm", dep=TRUE)
+```
+## Cargamos los archivos necesarios para realizar el análisis. A continuación filtramos y seleccionamos los datos de interés que vamos a utlizar.
+```{r}
+library(dplyr)
+counts <- read.csv("E:/datos omicos/pec2/counts.csv", sep=";")
+targets <- read.csv("E:/datos omicos/pec2/targets.csv")
+names(counts) <- chartr(".","-",names(counts)) ## Substituímos los caracteres apropiados en los nombres de las columnas para que sean iguales a las filas del archivo "targets"
+counts$X<-gsub("\\..*", "", counts$X, fixed = FALSE)
+## Visualizamos los datos para una primera aproximación.
+NIT <- filter(targets,targets$Group=="NIT") 
+SFI <- filter(targets,targets$Group=="SFI")
+ELI <- filter(targets,targets$Group=="ELI")
+```
+
+
+## Extraemos 10 muestras aleatorias de cada archivo.
+```{r}
+library(dplyr)
+library(MASS)
+set.seed(100)
+NIT_10 <- NIT[sample(nrow(NIT), 10),]
+SFI_10 <- SFI[sample(nrow(SFI), 10),]
+ELI_10 <- ELI[sample(nrow(ELI), 10),]
+```
+## Seleccionamos las columnas correspondientes a las muestras extraidas en el paso anterior y guardamos los datos en un fichero txt. Renombramos los datos en un fichero con las 30 columnas de muestras requeridas. Preparamos los nombres de los transcritos como nombres de filas.
+```{r}
+library(textshape)
+counts$X <- as.factor(counts$X)
+datasubset <-subset(counts,select = c(NIT_10$Sample_Name,SFI_10$Sample_Name,ELI_10$Sample_Name))
+datasubset <- cbind(counts$X,datasubset)
+column_to_rownames(datasubset,"counts$X")
+rownames(datasubset) <- counts$X
+datasubset$`counts$X` <- NULL
+write.table(datasubset,file = "E:/datos omicos/pec2/datasubset.txt") # Guardamos los datos en un archivo.
+countdata =datasubset
+
+```
+
+## Modificamos el archivo "targets" para quedarnos con las treinta muestras que necesitamos. 
+```{r}
+a <- colnames(countdata)
+coldata <- filter(targets,targets$Sample_Name %in% c(a))
+coldata_1 <- filter(coldata,Group=="NIT")
+coldata_2 <- filter(coldata,Group=="SFI")
+coldata_3 <- filter(coldata,Group=="ELI")                 
+```
+
+
+# 1. Comparación SFI-NIT. Preparamos los archivos y igualamos y ordenamos los nombres de filas de coldata(metadatos) y datacount(matriz de conteo).
+```{r}
+coldata_SFI_NIT <- rbind(coldata_2,coldata_1)
+coldata_SFI_NIT$Group <- as.factor(coldata_SFI_NIT$Group)
+countdata <- subset(countdata,select=coldata_SFI_NIT$Sample_Name)## 
+datacount_NIT_SFI <- countdata
+datacount_NIT_SFI <- datacount_NIT_SFI[,c(names(datacount_NIT_SFI))]
+names(datacount_NIT_SFI)
+coldata_SFI_NIT <- data.frame(coldata_SFI_NIT,row.names = colnames(datacount_NIT_SFI))
+coldata_SFI_NIT <- coldata_SFI_NIT[ ,c(names(coldata_SFI_NIT))]
+rownames(coldata_SFI_NIT)
+```
+## Para la segunda comparación creamos los archivos necesarios y los modificamos.
+```{r}
+coldata_ELI_NIT <- rbind(coldata_3,coldata_1)
+coldata_ELI_NIT$Group <- as.factor(coldata_ELI_NIT$Group)
+datacount_ELI_NIT <- subset(countdata,select=coldata_ELI_NIT$Sample_Name)
+coldata_ELI_NIT <- data.frame(coldata_ELI_NIT,row.names = colnames(datacount_ELI_NIT))
+coldata_ELI_NIT <- coldata_ELI_NIT[ ,c(names(coldata_ELI_NIT))]
+```
+## Tercera comparación
+```{r}
+coldata_ELI_SFI <- rbind(coldata_3,coldata_2)
+coldata_ELI_SFI$Group <- as.factor(coldata_ELI_SFI$Group)
+datacount_ELI_SFI <- subset(countdata,select=coldata_ELI_SFI$Sample_Name)
+coldata_ELI_SFI <- data.frame(coldata_ELI_SFI,row.names = colnames(datacount_ELI_SFI))
+coldata_ELI_SFI <- coldata_ELI_SFI[ ,c(names(coldata_ELI_SFI))]
+```
+
+
+# A continuación empezaremos con la primera comparación.
+## Obtenemos el fichero DESeqDataSet(dds) necesario para trabajar con el paquete DESeq2.
+```{r}
+dds_NIT_SFI <- DESeqDataSetFromMatrix(countData = datacount_NIT_SFI,colData = coldata_SFI_NIT,design = ~Group)
+dds_NIT_SFI        
+nrow(dds_NIT_SFI)
+dds_NIT_SFI <- dds_NIT_SFI[ rowSums(counts(dds_NIT_SFI)) > 1, ]
+nrow(dds_NIT_SFI)
+## Prefiltrado de datos. A continuación filtraremos las filas con valores nulos o con valor 1 para reducir el tamaño del archivo y agilizar los cálculos.
+```
+
+```{r}
+nrow(dds_NIT_SFI)
+dds_NIT_SFI <- dds_NIT_SFI[ rowSums(counts(dds_NIT_SFI)) > 1, ]
+nrow(dds_NIT_SFI)
+```
+### Vemos que se reduce de 56.202 a 41.436.
+
+## El siguiente paso será ,en primer lugar, realizar varios gráficos para una primera visualización de los datos; y , en segundo lugar, realizar el análisis de expresión diferencial mediante paquetes estadísticos.
+
+## Visualizamos los siguientes gráficos de los datos.
+
+```{r}
+library("dplyr")
+library("ggplot2")
+vsd <- vst(dds_NIT_SFI, blind = FALSE)
+head(assay(vsd), 3)
+colData(vsd)
+dds_NIT_SFI <- estimateSizeFactors(dds_NIT_SFI)
+rld <- rlog(dds_NIT_SFI, blind = FALSE)
+head(assay(rld), 3)
+df <- bind_rows(
+  as_data_frame(log2(counts(dds_NIT_SFI, normalized=TRUE)[, 1:2]+1)) %>%
+         mutate(transformation = "log2(x + 1)"),
+  as_data_frame(assay(vsd)[, 1:2]) %>% mutate(transformation = "vst"),
+  as_data_frame(assay(rld)[, 1:2]) %>% mutate(transformation = "rlog"))
+  
+colnames(df)[1:2] <- c("x", "y")  
+
+ggplot(df, aes(x = x, y = y)) + geom_hex(bins = 80) +
+  coord_fixed() + facet_grid( . ~ transformation)  
+```
+
+
+## Mostramos el primer trancrito
+
+```{r}
+pseudoCount = log2(datacount_NIT_SFI + 1)
+ggplot(pseudoCount, aes(x = pseudoCount$`GTEX-1122O-0226-SM-5N9DA`)) + ylab(expression(log[2](datacount_NIT_SFI + 1))) +
+geom_histogram(colour = "white", fill = "#525252", binwidth = 0.6)
+
+```
+
+
+
+
+## Un primer paso útil en un análisis de ARN-seq es evaluar la similitud general entre las muestras.  
+```{r}
+sampleDists <- dist(t(assay(vsd)))
+sampleDists
+library("pheatmap")
+library("RColorBrewer")
+
+sampleDistMatrix <- as.matrix( sampleDists )
+rownames(sampleDistMatrix) <- paste( vsd$dex, vsd$cell, sep = " - " )
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+```
+
+
+```{r fig.align='center', fig.width=5, fig.height=5}
+plotPCA(vsd, intgroup = c("Group", "Sample_Name"))
+```
+
+```{r fig.align='center', fig.width=5, fig.height=5}
+mds <- as.data.frame(colData(vsd))  %>%
+         cbind(cmdscale(sampleDistMatrix))
+ggplot(mds, aes(x = `1`, y = `2`, color = 2, shape = Group)) +
+  geom_point(size = 3) + coord_fixed()
+
+```
+
+
+# Comenzamos la segunda parte del  análisis. Expresion diferencial de genes.
+```{r}
+dds_NIT_SFI<- DESeq(dds_NIT_SFI)
+res1 <- results(dds_NIT_SFI)
+```
+## Visualizamos el achivo.
+```{r}
+head(results(dds_NIT_SFI, tidy=TRUE))
+summary(res1)
+```
+
+
+
+## Ordenamos en función del p-valor
+```{r}
+res1 <- res1[order(res1$padj),]
+head(res1)
+```
+
+
+## Podemos seguir dos criterios diferentes más restrictivos a la hora de considerar genes significativamente diferenciados.
+### Bajando el umbral de la tasa de detección falsa:
+```{r}
+res.05 <- results(dds_NIT_SFI, alpha = 0.05)
+table(res.05$padj < 0.05)
+```
+
+## Si queremos elevar el umbral del log2:
+```{r}
+resLFC1 <- results(dds_NIT_SFI, lfcThreshold=1)
+table(resLFC1$padj < 0.1)
+```
+
+## Por lo tanto, si consideramos que una fracción de 10% de falsos positivos es aceptable, podemos considerar que todos los genes con un valor p ajustado por debajo del 10% a 0,1 son significativos. ¿Cuántos genes de este tipo hay?. 
+```{r}
+sum(res$padj < 0.1, na.rm=TRUE)
+```
+
+## Colocamos la tabla de resultados en estos genes y luego la ordenamos por la estimación de cambio de pliegue log2 para obtener los genes significativos con la regulación descendente más fuerte:
+```{r}
+resSig <- subset(res1, padj < 0.1)
+head(resSig[ order(resSig$log2FoldChange), ])
+```
+## ...y con la regulación más fuerte:
+
+```{r}
+head(resSig[ order(resSig$log2FoldChange, decreasing = TRUE), ])
+```
+
+## Visualizamos
+```{r message=FALSE, fig.align='center', fig.width=5, fig.height=4}
+topGene <- rownames(res1)[which.min(res$padj)]
+library("ggbeeswarm")
+geneCounts <- plotCounts(dds_NIT_SFI, gene = topGene, intgroup = c("Group","sex"),
+                         returnData = TRUE)
+ggplot(geneCounts, aes(x = Group, y = count, color = sex, group = sex)) +
+  scale_y_log10() + geom_point(size = 3) + geom_line()
+```
+
+
+
+
+
+## Plotcounts, de los primeros 6 transcritos más diferenciados.
+```{r}
+par(mfrow=c(2,3))
+plotCounts(dds_NIT_SFI, gene="ENSG00000211950", intgroup="Group")
+plotCounts(dds_NIT_SFI, gene="ENSG00000211670", intgroup="Group")
+plotCounts(dds_NIT_SFI, gene="ENSG00000211934", intgroup="Group")
+plotCounts(dds_NIT_SFI, gene="ENSG00000231475", intgroup="Group")
+plotCounts(dds_NIT_SFI, gene="ENSG00000211973", intgroup="Group")
+plotCounts(dds_NIT_SFI, gene="ENSG00000211959", intgroup="Group")
+```
+
+## Volcano plot
+```{r}
+#reset par
+par(mfrow=c(1,1))
+# Make a basic volcano plot
+with(res1, plot(log2FoldChange, -log10(pvalue), pch=20, main="Volcano plot", xlim=c(-3,3)))
+
+# Add colored points: blue if padj<0.01, red if log2FC>1 and padj<0.05)
+with(subset(res1, padj<.01 ), points(log2FoldChange, -log10(pvalue), pch=20, col="blue"))
+with(subset(res1, padj<.01 & abs(log2FoldChange)>2), points(log2FoldChange, -log10(pvalue), pch=20, col="red"))
+
+```
+## MA-plot
+
+
+```{r message=FALSE}
+library("ggbeeswarm")
+library("apeglm")
+resultsNames(dds_NIT_SFI)
+```
+```{r fig.align='center', fig.width=5, fig.height=4}
+res_SFI_NIT <- lfcShrink(dds_NIT_SFI, coef="Group_SFI_vs_NIT", type="apeglm")
+plotMA(res_SFI_NIT, ylim = c(-5, 5))
+```
+
+
+
+```{r fig.align='center', fig.width=5, fig.height=4}
+plotMA(res_SFI_NIT, ylim = c(-5,5))
+topGene <- rownames(res_SFI_NIT)[which.min(res_SFI_NIT$padj)]
+with(res[topGene, ], {
+  points(baseMean, log2FoldChange, col="dodgerblue", cex=2, lwd=2)
+  text(baseMean, log2FoldChange, topGene, pos=2, col="dodgerblue")
+})
+```
+
+
+## Gene clustering
+## Visualizamos un clúster de los genes de más variación. Usaremos la trasnformación de estabilización de la varianza(vst), que integra el paquete DESeq2 y permite mejor tratamiento para los datos que generalmente tienen el mismo rango de varianza en diferentes rangos de los valores medios. Podemos añadir la variable "sex" para ver la relación.
+
+```{r message= FALSE, fig.align='center', fig.width=5, fig.height=4}
+library("genefilter")
+library(pheatmap)
+vsd <- vst(dds_NIT_SFI, blind = FALSE)
+head(assay(vsd), 3)
+colData(vsd)
+topVarGenes <- head(order(rowVars(assay(vsd)), decreasing = TRUE), 20)
+mat  <- assay(vsd)[topVarGenes, ]
+mat  <- mat - rowMeans(mat)
+anno <- as.data.frame(colData(vsd)[, c("Group","sex")])
+pheatmap(mat, annotation_col = anno)
+```
+
+
+
+
+
+
+
+
+```{r message=FALSE, fig.align='center', fig.width=5, fig.height=4}
+topGene <- rownames(res)[which.min(res$padj)]
+
+library("ggbeeswarm")
+
+geneCounts <- plotCounts(dds_NIT_SFI, gene = topGene, intgroup = c("Group"),
+                         returnData = TRUE)
+ggplot(geneCounts, aes(x = 3, y = count, color = 2, group = Group)) +
+  scale_y_log10() + geom_point(size = 3) + geom_line()
+```
+
+
+
+
+## Estimamos los parámetros de dispersión.
+
+```{r}
+## Estimate the size factors for the dds DESeqDataSet
+dds_exp = estimateSizeFactors(dds_NIT_SFI)
+## Estimate the dispersions for negative binomial distributed data
+dds_dis = estimateDispersions(dds_exp)
+## Plot dispersion estimates
+plotDispEsts(dds_dis, ymin = 0.01)
+```
+
+```{r}
+DESeq2::plotMA(res1, main = "DESeq2", ylim = c(-4, 4))
+```
+## Vemos los datos utilizando la transformación de la estabilización de la varianza (vst) .
+
+```{r}
+library("genefilter")
+library("apeglm")
+library("ggbeeswarm")
+vsdata1 <- vst(dds_NIT_SFI, blind=FALSE)
+plotPCA(vsdata1, intgroup="Group")
+```
+
+## Exportamos los resultados
+```{r}
+write.csv(as.data.frame(res1), file = "E:/datos omicos/pec2/results_DESeq2.csv")
+```
+
+
+
+# Anotaciones
+
+## Preparamos los paquetes necesarios
+
+```{r message= FALSE}
+library("AnnotationDbi")
+library(org.Hs.eg.db)
+columns(org.Hs.eg.db)
+```
+
+## Ordenamos por pvalor.
+
+```{r}
+res_SFI_NIT$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res_SFI_NIT),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+res_SFI_NIT$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res_SFI_NIT),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+resOrdered <- res_SFI_NIT[order(res_SFI_NIT$pvalue),]
+head(resOrdered)
+resOrderedDF <- as.data.frame(resOrdered)
+library(dplyr)
+write.table(resOrdered,file = "E:/datos omicos/pec2/resultados_ord_SFI_NIT.txt")
+```
+
+
+
+
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("clusterProfiler")
+```
+
+
+
+
+# Patrones de expresión y agrupación de muestras.
+## Obtenemos los resultados de las otras dos comparaciones. Primero ELI(extensive infiltrates) contra NIT(no infiltrate).
+```{r}
+dds_ELI_NIT <- DESeqDataSetFromMatrix(countData = datacount_ELI_NIT,colData = coldata_ELI_NIT,design = ~Group)
+dds_ELI_NIT 
+nrow(dds_ELI_NIT)
+dds_ELI_NIT <- dds_ELI_NIT[ rowSums(counts(dds_ELI_NIT)) > 1, ]
+nrow(dds_ELI_NIT)
+dds_ELI_NIT <- DESeq(dds_ELI_NIT)
+res_ELI_NIT <- results(dds_ELI_NIT)
+head(results(dds_ELI_NIT, tidy=TRUE))
+res_ELI_NIT <- res_ELI_NIT[order(res_ELI_NIT$padj),]
+head(res_ELI_NIT)
+write.table(res_ELI_NIT,file = "E:/datos omicos/pec2/resultados_ELI_NIT.txt")
+```
+
+
+## Plotcounts, de los primeros transcritos.
+```{r}
+par(mfrow=c(2,3))
+plotCounts(dds_ELI_NIT, gene="ENSG00000223972", intgroup="Group")
+plotCounts(dds_ELI_NIT, gene="ENSG00000227232", intgroup="Group")
+plotCounts(dds_ELI_NIT, gene="ENSG00000243485", intgroup="Group")
+plotCounts(dds_ELI_NIT, gene="ENSG00000237613", intgroup="Group")
+plotCounts(dds_ELI_NIT, gene="ENSG00000268020", intgroup="Group")
+plotCounts(dds_ELI_NIT, gene="ENSG00000240361", intgroup="Group")
+```
+## Volcano Plot
+```{r}
+
+#reset par
+par(mfrow=c(1,1))
+# Make a basic volcano plot
+with(res_ELI_NIT, plot(log2FoldChange, -log10(pvalue), pch=20, main="Volcano plot", xlim=c(-3,3)))
+
+# Add colored points: blue if padj<0.01, red if log2FC>1 and padj<0.05)
+with(subset(res_ELI_NIT, padj<.01 ), points(log2FoldChange, -log10(pvalue), pch=20, col="blue"))
+with(subset(res_ELI_NIT, padj<.01 & abs(log2FoldChange)>2), points(log2FoldChange, -log10(pvalue), pch=20, col="red"))
+```
+
+
+## PCA plot
+```{r}
+#Primero transformamos los datos
+# La función vst permite la transformación de la estabilización de la varianza
+vsdata2 <- vst(dds_ELI_NIT, blind=FALSE)
+plotPCA(vsdata, intgroup="Group") 
+```
+```{r}
+DESeq2::plotMA(res_ELI_NIT, main = "DESeq2", ylim = c(-4, 4))
+```
+
+## Anotaciones segunda comparación, ELI-NIT.
+```{r}
+res_ELI_NIT$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res_ELI_NIT),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+res_ELI_NIT$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res_ELI_NIT),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+resOrdered_ELI_NIT <- res_ELI_NIT[order(res_ELI_NIT$pvalue),]
+head(resOrdered_ELI_NIT)
+resOrderedDF_ELI_NIT <- as.data.frame(resOrdered)
+write.table(resOrderedDF_ELI_NIT,file = "E:/datos omicos/pec2/resultados_ord_ELI_NIT.txt")
+```
+
+
+## En segundo lugar, la tercera comparación , ELI(extensive infiltrates) contra SFI(small infiltrates).
+```{r}
+dds_ELI_SFI <- DESeqDataSetFromMatrix(countData = datacount_ELI_SFI,colData = coldata_ELI_SFI,design = ~Group)
+dds_ELI_SFI 
+nrow(dds_ELI_SFI)
+dds_ELI_SFI <- dds_ELI_SFI [ rowSums(counts(dds_ELI_SFI )) > 1, ]
+nrow(dds_ELI_SFI)
+dds_ELI_SFI <- DESeq(dds_ELI_SFI)
+res_ELI_SFI <- results(dds_ELI_SFI)
+head(results(dds_ELI_SFI, tidy=TRUE))
+res_ELI_SFI <- res_ELI_SFI[order(res_ELI_SFI$padj),]
+head(res_ELI_SFI)
+write.table(res_ELI_SFI,file = "E:/datos omicos/pec2/resultados_ELI_SFI.txt")
+```
+
+## Plotcounts, de los primeros transcritos.
+```{r}
+par(mfrow=c(2,3))
+plotCounts(dds_ELI_SFI, gene="ENSG00000223972", intgroup="Group")
+plotCounts(dds_ELI_SFI, gene="ENSG00000227232", intgroup="Group")
+plotCounts(dds_ELI_SFI, gene="ENSG00000243485", intgroup="Group")
+plotCounts(dds_ELI_SFI, gene="ENSG00000237613", intgroup="Group")
+plotCounts(dds_ELI_SFI, gene="ENSG00000268020", intgroup="Group")
+plotCounts(dds_ELI_SFI, gene="ENSG00000240361", intgroup="Group")
+```
+
+## Volcano Plot
+```{r}
+
+#reset par
+par(mfrow=c(1,1))
+# Make a basic volcano plot
+with(res_ELI_SFI, plot(log2FoldChange, -log10(pvalue), pch=20, main="Volcano plot", xlim=c(-3,3)))
+
+# Add colored points: blue if padj<0.01, red if log2FC>1 and padj<0.05)
+with(subset(res_ELI_SFI, padj<.01 ), points(log2FoldChange, -log10(pvalue), pch=20, col="blue"))
+with(subset(res_ELI_SFI, padj<.01 & abs(log2FoldChange)>2), points(log2FoldChange, -log10(pvalue), pch=20, col="red"))
+```
+
+
+## PCA plot
+```{r}
+#Primero transformamos los datos
+# La función vst permite la transformación de la estabilización de la varianza
+vsdata3 <- vst(dds_ELI_SFI, blind=FALSE)
+plotPCA(vsdata3, intgroup="Group") 
+```
+
+```{r}
+DESeq2::plotMA(res_ELI_SFI, main = "DESeq2", ylim = c(-4, 4))
+```
+
+```{r}
+res_ELI_SFI$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res_ELI_SFI),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+res_ELI_SFI$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res_ELI_SFI),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+resOrdered_ELI_SFI <- res_ELI_SFI[order(res_ELI_SFI$pvalue),]
+head(resOrdered_ELI_SFI)
+resOrderedDF_ELI_SFI <- as.data.frame(resOrdered_ELI_SFI)
+library(dplyr)
+write.table(resOrdered_ELI_SFI,file = "E:/datos omicos/pec2/resultados_ord_ELI_SFI.txt")
+```
+## Gene Enrichment analysis.
+
+
+```{r}
+library(magrittr)
+library(clusterProfiler)
+```
+
+```{r}
+library(dplyr)
+View(resultados_ord_SFI_NIT)
+View(resultados_ord_ELI_NIT)
+View(resultados_ord_ELI_SFI)
+enrich_SFI_NIT <- data.frame(resultados_ord_SFI_NIT$log2FoldChange,resultados_ord_SFI_NIT$entrez)
+enrich_ELI_NIT <- data.frame(resultados_ord_ELI_NIT$log2FoldChange,resultados_ord_ELI_NIT$entrez)
+enrich_ELI_SFI <- data.frame(resultados_ord_ELI_SFI$log2FoldChange,resultados_ord_ELI_SFI$entrez)
+```
+
+
+```{r}
+genelist_SFI_NIT <- data.frame(resultados_ord_SFI_NIT$entrez,resultados_ord_SFI_NIT$log2FoldChange)
+genelist1 <- resultados_ord_SFI_NIT$entrez
+genelist1 <- na.omit(genelist1)
+genelist1 <- as.numeric(genelist1)
+```
+
+```{r}
+library(fgsea)
+library(dplyr)
+gseaInput <- filter(resultados_ord_SFI_NIT, !is.na(entrezID))%>% 
+  arrange(lfcSE)
+ranks_1 <- pull(gseaInput)
+names(ranks_1) <- gseaInput$entrezID
+barplot(ranks_1)
+```
+
+
+## cluster profiler
+
+```{r}
+gseaInput_2 <- filter(resultados_ord_ELI_NIT, !is.na(entrez))%>% 
+  arrange(lfcSE)
+ranks_2 <- pull(gseaInput_2)
+names(ranks_2) <- gseaInput_2$entrez
+barplot(ranks_2)
+
+```
+
+
+
+
+
+
+
+
+```{r}
+
+gseaInput_3 <- filter(resultados_ord_ELI_SFI, !is.na(entrez))%>% 
+  arrange(lfcSE)
+ranks_3 <- pull(resultados_ord_ELI_SFI)
+names(ranks_3) <- gseaInput_3$entrez
+barplot(ranks_3)
+```
+
+```{r}
+library(ggplot2)
+dotplot(resultados_ord_SFI_NIT)
+```
